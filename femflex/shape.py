@@ -11,7 +11,7 @@ class ShapeFunctionBase(ABC):
         if 'index' in kawrgs:
             index = kwargs['index']
             from collections.abc import Iterable
-            if isinstance(index, Iterable)
+            if isinstance(index, Iterable):
                 return asarray([basis(i)(x) for i in index])
             else: # is an integer
                 return basis(index)(x)
@@ -20,13 +20,13 @@ class ShapeFunctionBase(ABC):
             return asarray([basis(i)(x) for i in range(nbasis)])
 
     def base(self, **kwargs):
-        return self.eval(order=0, kwargs)
+        return self.eval(order=0, **kwargs)
 
     def first_derivative(self, **kwargs):
-        return self.eval(order=1, kwargs)
+        return self.eval(order=1, **kwargs)
     
     def nth_derivative(self, n, **kwargs):
-        return self.eval(order=n, kwargs) 
+        return self.eval(order=n, **kwargs) 
 
     @abstractmethod
     def get_basis_functions(self, order, index, **kwargs):
@@ -42,20 +42,29 @@ class Shape1DIGA(ShapeFunctionBase):
         super().__init__() 
         self.porder = porder
         base = []
-        base.append(BSpline([0, 0, 0, 1], [1], self.porder))
-        base.append(BSpline([0, 0, 1, 2], [1], self.porder))
-        base.append(BSpline([-1, -1, 0, 1], [1], self.porder))
-        base.append(BSpline([0, 1, 2, 3], [1], self.porder))
-        base.append(BSpline([-1, 0, 1, 2], [1], self.porder))
-        base.append(BSpline([-2, -1, 0, 1], [1], self.porder))
+        from scipy.interpolate import BSpline
+        if porder == 2:
+            base.append(BSpline([0, 0, 0, 1], [1], self.porder))
+            base.append(BSpline([0, 0, 1, 2], [1], self.porder))
+            base.append(BSpline([-1, -1, 0, 1], [1], self.porder))
+            base.append(BSpline([0, 1, 2, 3], [1], self.porder))
+            base.append(BSpline([-1, 0, 1, 2], [1], self.porder))
+            base.append(BSpline([-2, -1, 0, 1], [1], self.porder))
+            base.append(BSpline([-1, 0, 1, 1], [1], self.porder))
+            base.append(BSpline([0, 1, 2, 2], [1], self.porder))
+            base.append(BSpline([0, 1, 1, 1], [1], self.porder))
+        else:
+            raise ValueError("Not supported yet.")
         self.base_fn = base
+
     def get_num_basis_functions(self):
-        if self.porder == 1:
+        p = self.porder
+        if p == 1:
             return 2
         else:
-            return -1
+            return (p + 2) * (p + 1) // 2
+
     def get_basis_functions(self, dorder, index):
-        from scipy.interpolate import BSpline
         def derivative(e, n):
             for _ in range(n):
                 e = e.derivative()
