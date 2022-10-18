@@ -47,8 +47,8 @@ class IntervalMesh(MeshBase):
         return linspace(0, 1, n + 1).reshape(-1, 1)
 
     def _impl_generate_cells(self, n):
-        self.element = [[i, i+1] for i in range(n)] 
+        return [[i, i+1] for i in range(n)] 
 
     def _impl_generate_facets(self, n):
-        self.facets = [[i] for i in range(n + 1)]
+        return [[i] for i in range(n + 1)]
 
