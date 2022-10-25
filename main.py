@@ -47,20 +47,29 @@ def qr(x):
     gw = np.array([1.0, 1.0])
     return gp, gw
 
-def assemble(space, dT1, dT0, T0):
+def assemble(mesh, space, dT1, dT0, T0):
     ndof = space.num_dofs()
     R = np.zeros((ndof))
     ncell = space.num_cells()
+    basis = space._basis
     for ic in range(ncell):
-        basis = space.cell_basis(ic)
+        basis_dof = space.cell_basis(ic)
         dof = space.cell_dof(ic)
-        
-        dT1_val = dT1[dof]
-        dT0_val = dT0[dof]
-        T0_val = T0[dof]
+        xx = mesh.node(mesh.cell(ic)) 
+        gp, gw = qr(xx)
+        detJ = abs(xx[1] - xx[0]) / 2
+        basis_val = np.array([basis.eval(p, dorder=0, index=fid) for p in gp for fid in basis_dof])
+        basis_grad_val = np.array([basis.eval(p, dorder=1, index=fid) for p in gp for fid in basis_dof])
+        dT1_val = np.dot(dT1[dof], basis_val)
+        dT0_val = np.dot(dT0[dof], basis_val)
+        T0_val = np.dot(T0[dof], basis_val)
         dTm_val = am * dT1_val + (1 - am) * dT0_val
-        Tm_val = T0_val + dt * af * (gamma * dT1_val + (1 - gamma) * dT0_val)
-
+        gradTm_val = T0[dof].dot(basis_grad_val) + dt * af * (gamma * dT1[dof].dot(basis_grad_val) + (1 - gamma) * dT0[dof].dot(basis_grad_val))
+        
+        Rcell = np.dot(basis_val, dTm_val) + np.dot(basis_grad_val, k0 * gradTm_val)
+        Rcell = Recell.dot(gw) * detJ
+        R[dof] += Rcell
+    return R
 if __name__ == '__main__':
     mesh = flex.IntervalMesh(11)
     space = SpaceEnriched1DIGA(mesh, 2)
