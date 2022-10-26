@@ -50,7 +50,7 @@ def qr(x):
 def assemble(mesh, space, dT1, dT0, T0):
     ndof = space.num_dofs()
     R = np.zeros((ndof))
-    ncell = space.num_cells()
+    ncell = mesh.num_cell()
     basis = space._basis
     for ic in range(ncell):
         basis_dof = space.cell_basis(ic)
@@ -73,3 +73,8 @@ def assemble(mesh, space, dT1, dT0, T0):
 if __name__ == '__main__':
     mesh = flex.IntervalMesh(11)
     space = SpaceEnriched1DIGA(mesh, 2)
+    ndof = space.num_dofs()
+    dT1 = np.zeros((ndof,))
+    dT0 = np.zeros((ndof,))
+    T0 = np.zeros((ndof,))
+    assemble(mesh, space, dT1, dT0, dT0)
