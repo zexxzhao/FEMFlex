@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import List
 
 
 class GenericSpace(ABC):
@@ -17,13 +18,13 @@ class GenericSpace(ABC):
     def element(self):
         return self._element
 
-    def cell_dof(self, i):
+    def cell_dof(self, i) -> List[int]:
         return self._dof[i]
 
-    def cell_basis(self, i):
+    def cell_basis(self, i) -> List[float]:
         return self._basis[i]
 
-    def num_dofs(self):
+    def num_dofs(self) -> int:
         return max([d for cdof in self._dof for d in cdof]) + 1
 
     @abstractmethod

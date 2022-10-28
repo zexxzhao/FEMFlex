@@ -3,7 +3,7 @@ from dolfin import *
 import matplotlib.pyplot as plt
 
 dt = 1e-3
-mesh = IntervalMesh(8000, 0, 1)
+mesh = IntervalMesh(1024*8, 0, 1)
 
 element = FiniteElement('CG', mesh.ufl_cell(), 1)
 W = FunctionSpace(mesh, element)
@@ -35,6 +35,7 @@ if __name__ == '__main__':
         dT1.vector()[:] = (gamma - 1) / gamma
         solve(F == 0, dT1)
         T0.vector()[:] += dt * (gamma * dT1.vector() + (1 - gamma) * dT0.vector())
+        dT0.vector()[:] = dT1.vector()
 
     y = T0.compute_vertex_values().reshape(-1, 1)
     x = mesh.coordinates()
