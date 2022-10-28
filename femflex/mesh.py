@@ -48,16 +48,19 @@ class MeshBase(ABC):
 
 
 class IntervalMesh(MeshBase):
-    def __init__(self, n):
-        super().__init__(n=n)
+    def __init__(self, n, degree):
+        super().__init__(n=n, degree=degree)
 
     def _impl_generate_nodes(self, **kwargs):
         n = kwargs['n'] if 'n' in kwargs else 0
+        deg = kwargs['degree'] if 'degree' in kwargs else 2
         from numpy import linspace
-        return linspace(0, 1, n + 1).reshape(-1, 1)
+        return linspace(0, 1, n + deg).reshape(-1, 1)
 
-    def _impl_generate_cells(self, n):
-        return [[i, i+1] for i in range(n)]
+    def _impl_generate_cells(self, **kwargs):
+        n = kwargs['n'] if 'n' in kwargs else 0
+        deg = kwargs['degree'] if 'degree' in kwargs else 2
+        return [[i + j for j in range(deg + 1)] for i in range(n)]
 
-    def _impl_generate_facets(self, n):
-        return [[i] for i in range(n + 1)]
+    def _impl_generate_facets(self, **kwargs):
+        return []
