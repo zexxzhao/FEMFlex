@@ -44,7 +44,7 @@ dt = 1e-3/16
 k0, k1 = 1.0e0, 1.0e0
 
 
-def qr(n=3):
+def qr(n=4):
     sqrt = np.sqrt
     asarray = np.asarray
     if n == 1:
@@ -68,8 +68,7 @@ def qr(n=3):
     return (gp + 1) * 0.5, gw * 0.5
 
 
-def assemble(space: GenericSpace, dT1: np.ndarray,
-             dT0: np.ndarray, T0: np.ndarray) -> np.ndarray:
+def assemble(space: GenericSpace, T0: np.ndarray) -> np.ndarray:
     ndof = space.num_dofs()
     R = np.zeros((ndof,))
     mesh = space.mesh()
@@ -86,14 +85,8 @@ def assemble(space: GenericSpace, dT1: np.ndarray,
         dxdxi = np.dot(xx.squeeze(), basis_grad_val)
         detJ = np.abs(dxdxi)
         basis_grad_val /= dxdxi
-        dT1_val = np.dot(dT1[dof], basis_val)
-        dT0_val = np.dot(dT0[dof], basis_val)
-        dTm_val = am * dT1_val + (1 - am) * dT0_val
         gradTm_val = T0[dof].dot(basis_grad_val)
-        + dt * af * (gamma * dT1[dof].dot(basis_grad_val)
-                     + (1 - gamma) * dT0[dof].dot(basis_grad_val))
-        Rcell = np.dot(basis_val, dTm_val * gw * detJ) \
-            + np.dot(basis_grad_val, k0 * gradTm_val * gw * detJ)
+        Rcell = np.dot(basis_grad_val, k0 * gradTm_val * gw * detJ)
         R[dof] += Rcell
     return R
 
@@ -117,26 +110,26 @@ def evaluate_vec(space, v, n=100):
 
 def evaluate_error(v0, v1):
     n = v0.shape[0]
-    return np.linalg.norm(v0 - v1) / np.sqrt(n)
+    return np.linalg.norm(v0 - v1) / np.sqrt(n), np.max(v0 - v1)
 
 
 def main(nntime=100, visual=True):
-    mesh = flex.IntervalMesh(40, 2)
+    mesh = flex.IntervalMesh(5, 2)
     space = SpaceEnriched1DIGA(mesh, 2)
     ndof = space.num_dofs()
     dT1 = np.zeros((ndof,))
     dT0 = np.zeros((ndof,))
     T0 = np.zeros((ndof,))
     for i in range(ndof):
-        T0[i] = np.sin(np.pi*i/(ndof-1)) * 1.0
-    T0[-1] = 0.0
+        T0[i] = np.cos(np.pi*i/(ndof-1)) * 1.0
+    #T0[-1] = 0.0
     Tinit = T0.copy()
     from scipy.optimize import root
     for i in range(nntime):
         print(f'i={i+1}, time={i*dt+dt}')
         dT1 *= (gamma - 1) / gamma
         sol = root(lambda dTem: assemble(space, dTem, dT0, T0),
-                   dT1, tol=1e-6, method='hybr')
+                   dT1, tol=1e-12, method='hybr')
 
         dT1[:] = sol.x
         T0[:] += dt * (gamma * dT1 + (1 - gamma) * dT0)
@@ -146,21 +139,12 @@ def main(nntime=100, visual=True):
     if visual:
         plt.figure(figsize=(8*1.5, 3.5*1.5))
         plt.subplot(121)
-        xp, yp = evaluate_vec(space, dT1)
-        plt.plot(xp, yp, 'k')
-        plt.xlabel('x', fontsize=20)
-        plt.ylabel(r'$\dot{T}$', fontsize=20)
-        plt.xticks(fontsize=15)
-        plt.yticks(fontsize=15)
-        plt.xlim([0, 1])
-        plt.tight_layout()
-        plt.subplot(122)
         xp, yp = evaluate_vec(space, Tinit)
         plt.plot(xp, yp, 'b', label='t=0.00')
         xp, yp = evaluate_vec(space, T0)
         plt.plot(xp, yp, 'k', label='t=0.05')
-        ref = np.loadtxt('ref.txt')
-        plt.plot(ref[:, 0], ref[:, 1], 'r', label='FENICS')
+        Tp = np.exp(-np.pi**2*0.005) * np.cos(np.pi*np.array(xp))
+        plt.plot(xp, Tp, 'r', label='Exact')
         plt.xlabel('x', fontsize=20)
         plt.ylabel(r'${T}$', fontsize=20)
         plt.xticks(fontsize=15)
@@ -168,8 +152,16 @@ def main(nntime=100, visual=True):
         plt.xlim([0, 1])
         plt.legend(fontsize=15)
         plt.tight_layout()
+        plt.subplot(122)
+        plt.plot(xp, Tp - yp)
+        plt.xlabel('x', fontsize=20)
+        plt.ylabel(r'${T}$', fontsize=20)
+        plt.xticks(fontsize=15)
+        plt.yticks(fontsize=15)
+        plt.xlim([0, 1])
+        plt.tight_layout()
         plt.savefig('./cmp.png')
-        Tp = np.interp(xp, ref[:, 0], ref[:, 1])
+        #Tp = np.interp(xp, ref[:, 0], ref[:, 1])
         print(evaluate_error(Tp, yp))
 
 
@@ -187,4 +179,4 @@ def profiling(f, turn_on):
 
 if __name__ == '__main__':
     main = profiling(main, 0)
-    main(800)
+    main(5*16)

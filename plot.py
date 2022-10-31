@@ -1,7 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-e = [0.00063707859, 0.0020569838707, 0.0075703609715]
+#e = [0.00063707859, 0.0020569838707, 0.0075703609715]
+e=[]
+e.append(0.00036170741367984863)
+e.append(0.001266019025124287)
+e.append(0.004537312895183812)
 x = 1/np.array([40, 20, 10])
 
 plt.loglog(x, e, c='b', label='2nd iga')
