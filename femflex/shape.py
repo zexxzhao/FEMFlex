@@ -5,17 +5,9 @@ class ShapeFunctionBase(ABC):
     def eval(self, x, order=0, index=None):
         if index is None:
             index = range(self.get_num_basis_functions())
-
-        def basis(indices):
-            return self.get_basis_functions(order, indices)
         basis_fn = self.get_basis_functions(order, index)
         from numpy import asarray
         return asarray([e(x) for e in basis_fn])
-        from collections.abc import Iterable
-        if isinstance(index, Iterable):
-            return asarray([basis(i)(x) for i in index])
-        else:  # 'index' is an integer
-            return basis(index)(x)
 
     def base(self, **kwargs):
         return self.eval(order=0, **kwargs)
@@ -71,9 +63,9 @@ class Shape1DIGA(ShapeFunctionBase):
 
     def get_basis_functions(self, order, index):
         def derivative(f, d):
-            for _ in range(d):
-                f = f.derivative()
-            return f
+            def f1(x, h=1e-6):
+                return (f(x+h) - f(x-h)) / (2.0*h)
+            return f if d == 0 else f1
         from collections.abc import Sequence
         if isinstance(index, Sequence):
             return [derivative(self.base_fn[idx], order) for idx in index]

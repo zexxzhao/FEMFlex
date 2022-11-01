@@ -6,6 +6,8 @@ from collections.abc import Callable
 import femflex as flex
 from femflex.space import GenericSpace
 
+from numba import jit
+
 
 class SpaceEnriched1DIGA(GenericSpace):
     def __init__(self, mesh, k):
@@ -42,10 +44,11 @@ rhoc = 0.5
 am = 0.5 * (3 - rhoc) / (1 + rhoc)
 af = 1 / (1 + rhoc)
 gamma = 0.5 + am - af
-dt = 1e-3/16
+dt = 1e-3*5e-3
 k0, k1 = 1.0e0, 1.0e0
 
 
+@jit(nopython=True)
 def qr(n=4):
     sqrt = np.sqrt
     asarray = np.asarray
@@ -77,13 +80,15 @@ def assemble_init(space: GenericSpace,
     mesh = space.mesh()
     ncell = space.mesh().num_cells()
     element = space.element()
+    gp, gw = qr()
+    basis_val_all = element.eval(gp, order=0)
+    basis_grad_val_all = element.eval(gp, order=1)
     for ic in range(ncell):
         basis_dof = space.cell_basis(ic)
         dof = space.cell_dof(ic)
         xx = mesh.cell_coordinates(ic).squeeze()
-        gp, gw = qr()
-        basis_val = element.eval(gp, order=0, index=basis_dof)
-        basis_grad_val = element.eval(gp, order=1, index=basis_dof)
+        basis_val = basis_val_all[basis_dof]
+        basis_grad_val = basis_grad_val_all[basis_dof]
         xg = xx.dot(basis_val)
         dxdxi = np.dot(xx, basis_grad_val)
         detJ = np.abs(dxdxi)
@@ -102,14 +107,16 @@ def assemble(space: GenericSpace, dT1: np.ndarray,
     mesh = space.mesh()
     ncell = space.mesh().num_cells()
     element = space.element()
+    gp, gw = qr()
+    basis_val_all = element.eval(gp, order=0)
+    basis_grad_val_all = element.eval(gp, order=1)
+
     for ic in range(ncell):
         basis_dof = space.cell_basis(ic)
         dof = space.cell_dof(ic)
         xx = mesh.cell_coordinates(ic)
-        gp, gw = qr()
-        basis_val = element.eval(gp, order=0, index=basis_dof)
-        basis_grad_val = element.eval(gp, order=1, index=basis_dof)
-
+        basis_val = basis_val_all[basis_dof]
+        basis_grad_val = basis_grad_val_all[basis_dof]
         dxdxi = np.dot(xx.squeeze(), basis_grad_val)
         detJ = np.abs(dxdxi)
         basis_grad_val /= dxdxi
@@ -245,4 +252,4 @@ def profiling(f, turn_on):
 
 if __name__ == '__main__':
     main = profiling(main, 0)
-    main(5*16)
+    main(1000)
