@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -70,7 +71,7 @@ def qr(n=4):
 
 def temperature(x):
     pi = np.pi
-    return np.cos(pi * x)
+    return np.sin(pi * x)
 
 
 def assemble(space: GenericSpace, T0: np.ndarray) -> np.ndarray:
@@ -79,13 +80,15 @@ def assemble(space: GenericSpace, T0: np.ndarray) -> np.ndarray:
     mesh = space.mesh()
     ncell = space.mesh().num_cells()
     element = space.element()
+    gp, gw = qr()
+    basis_cache = element.eval(gp, order=0)
+    basis_grad_cache = element.eval(gp, order=1)
     for ic in range(ncell):
         basis_dof = space.cell_basis(ic)
         dof = space.cell_dof(ic)
         xx = mesh.cell_coordinates(ic).squeeze()
-        gp, gw = qr()
-        basis_val = element.eval(gp, order=0, index=basis_dof)
-        basis_grad_val = element.eval(gp, order=1, index=basis_dof)
+        basis_val = basis_cache[basis_dof]
+        basis_grad_val = basis_grad_cache[basis_dof]
         xc = xx.dot(basis_val)
         dxdxi = np.dot(xx.squeeze(), basis_grad_val)
         detJ = np.abs(dxdxi)
@@ -94,6 +97,8 @@ def assemble(space: GenericSpace, T0: np.ndarray) -> np.ndarray:
         Rcell = np.dot(basis_grad_val, k0 * gradTm_val * gw * detJ)\
             + np.dot(basis_val, -np.pi**2*temperature(xc) * gw * detJ)
         R[dof] += Rcell
+    print(R)
+    sys.exit()
     return R
 
 
