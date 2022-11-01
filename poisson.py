@@ -68,6 +68,11 @@ def qr(n=4):
     return (gp + 1) * 0.5, gw * 0.5
 
 
+def temperature(x):
+    pi = np.pi
+    return np.cos(pi * x)
+
+
 def assemble(space: GenericSpace, T0: np.ndarray) -> np.ndarray:
     ndof = space.num_dofs()
     R = np.zeros((ndof,))
@@ -77,16 +82,17 @@ def assemble(space: GenericSpace, T0: np.ndarray) -> np.ndarray:
     for ic in range(ncell):
         basis_dof = space.cell_basis(ic)
         dof = space.cell_dof(ic)
-        xx = mesh.cell_coordinates(ic)
+        xx = mesh.cell_coordinates(ic).squeeze()
         gp, gw = qr()
         basis_val = element.eval(gp, order=0, index=basis_dof)
         basis_grad_val = element.eval(gp, order=1, index=basis_dof)
-
+        xc = xx.dot(basis_val)
         dxdxi = np.dot(xx.squeeze(), basis_grad_val)
         detJ = np.abs(dxdxi)
         basis_grad_val /= dxdxi
         gradTm_val = T0[dof].dot(basis_grad_val)
-        Rcell = np.dot(basis_grad_val, k0 * gradTm_val * gw * detJ)
+        Rcell = np.dot(basis_grad_val, k0 * gradTm_val * gw * detJ)\
+            + np.dot(basis_val, -np.pi**2*temperature(xc) * gw * detJ)
         R[dof] += Rcell
     return R
 
@@ -105,7 +111,7 @@ def evaluate_vec(space, v, n=100):
         basis_val = element.eval(xi, order=0, index=basis_dof)
         xp += xc.dot(basis_val).tolist()
         vp += v[dofs].dot(basis_val).tolist()
-    return xp, vp
+    return np.asarray(xp), np.asarray(vp)
 
 
 def evaluate_error(v0, v1):
@@ -114,36 +120,26 @@ def evaluate_error(v0, v1):
 
 
 def main(nntime=100, visual=True):
-    mesh = flex.IntervalMesh(5, 2)
+    nmesh = 2
+    import sys
+    if len(sys.argv) == 2:
+        nmesh = int(sys.argv[1])
+    mesh = flex.IntervalMesh(nmesh, 2)
     space = SpaceEnriched1DIGA(mesh, 2)
     ndof = space.num_dofs()
-    dT1 = np.zeros((ndof,))
-    dT0 = np.zeros((ndof,))
+
     T0 = np.zeros((ndof,))
-    for i in range(ndof):
-        T0[i] = np.cos(np.pi*i/(ndof-1)) * 1.0
-    #T0[-1] = 0.0
-    Tinit = T0.copy()
+
     from scipy.optimize import root
-    for i in range(nntime):
-        print(f'i={i+1}, time={i*dt+dt}')
-        dT1 *= (gamma - 1) / gamma
-        sol = root(lambda dTem: assemble(space, dTem, dT0, T0),
-                   dT1, tol=1e-12, method='hybr')
-
-        dT1[:] = sol.x
-        T0[:] += dt * (gamma * dT1 + (1 - gamma) * dT0)
-        dT0[:] = dT1[:]
-    np.savetxt(f'tem{i+1}.txt', T0)
-
+    sol = root(lambda x: assemble(space, x), T0, tol=1e-15)
+    T0[:] = sol.x
+    T0 -= np.mean(T0)
     if visual:
         plt.figure(figsize=(8*1.5, 3.5*1.5))
         plt.subplot(121)
-        xp, yp = evaluate_vec(space, Tinit)
-        plt.plot(xp, yp, 'b', label='t=0.00')
         xp, yp = evaluate_vec(space, T0)
-        plt.plot(xp, yp, 'k', label='t=0.05')
-        Tp = np.exp(-np.pi**2*0.005) * np.cos(np.pi*np.array(xp))
+        plt.plot(xp, yp, 'k', label='2nd IGA')
+        Tp = temperature(xp)
         plt.plot(xp, Tp, 'r', label='Exact')
         plt.xlabel('x', fontsize=20)
         plt.ylabel(r'${T}$', fontsize=20)
@@ -161,8 +157,7 @@ def main(nntime=100, visual=True):
         plt.xlim([0, 1])
         plt.tight_layout()
         plt.savefig('./cmp.png')
-        #Tp = np.interp(xp, ref[:, 0], ref[:, 1])
-        print(evaluate_error(Tp, yp))
+        print(*evaluate_error(Tp, yp))
 
 
 def profiling(f, turn_on):

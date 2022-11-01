@@ -8,10 +8,11 @@ class ShapeFunctionBase(ABC):
 
         def basis(indices):
             return self.get_basis_functions(order, indices)
-
+        basis_fn = self.get_basis_functions(order, index)
+        from numpy import asarray
+        return asarray([e(x) for e in basis_fn])
         from collections.abc import Iterable
         if isinstance(index, Iterable):
-            from numpy import asarray
             return asarray([basis(i)(x) for i in index])
         else:  # 'index' is an integer
             return basis(index)(x)
@@ -73,4 +74,8 @@ class Shape1DIGA(ShapeFunctionBase):
             for _ in range(d):
                 f = f.derivative()
             return f
-        return [derivative(e, order) for e in self.base_fn][index]
+        from collections.abc import Sequence
+        if isinstance(index, Sequence):
+            return [derivative(self.base_fn[idx], order) for idx in index]
+        else:
+            return derivative(self.base_fn[index], order)
