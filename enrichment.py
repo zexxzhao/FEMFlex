@@ -14,7 +14,8 @@ class SpaceEnriched1DIGA(GenericSpace):
 
     def _impl_generate_cell_to_dof_mapping(self, **kwargs):
         ncell = self.mesh().num_cells()
-        dofs = [[i + j for j in range(3)] for i in range(ncell)]
+        deg = self.element().degree
+        dofs = [[i + j for j in range(1 + deg)] for i in range(ncell)]
         return dofs
 
     def _impl_generate_cell_to_basis_mapping(self, **kwargs):
@@ -37,6 +38,30 @@ class SpaceEnriched1DIGA(GenericSpace):
         else:
             raise RuntimeError("Not supported yet.\n")
         return basis_fn_id
+
+
+class Dirichlet(object):
+    def __init__(self, dofs):
+        self._dofs = dofs
+
+    @property
+    def dofs(self):
+        return self._dofs
+
+    def __call__(self, **kwargs):
+        dof = self.dofs()
+        if 'A' in kwargs:
+            A = kwargs['A']
+            A[dof, :] = 0.0
+            A[:, dof] = 0.0
+            A[dof, dof] = 1.0
+            return A
+        if 'x' in kwargs and 'value' in kwargs:
+            x = kwargs['x']
+            value = kwargs['value']
+            x[dof] = value
+            return x
+        return
 
 
 rhoc = 0.5
@@ -270,5 +295,16 @@ if __name__ == '__main__':
         error_l2.append(e[0])
         print(i, e)
     error_l2 = np.array(error_l2)
-    p = np.polyfit(np.log(1/2**np.arange(1, 7)), np.log(error_l2), 1)
+    h = 1 / 2 ** np.arange(1, 7)
+    p = np.polyfit(np.log(h)[1:], np.log(error_l2)[1:], 1)
     print(p)
+
+    plt.loglog(h, error_l2, '-*', label='2nd IGA')
+    plt.loglog(h, 0.02*h**3, '--k', label='k=3')
+    plt.xlabel(r'$h$', fontsize=20)
+    plt.ylabel(r'$e$', fontsize=20)
+    plt.xticks(fontsize=15)
+    plt.yticks(fontsize=15)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.show()
