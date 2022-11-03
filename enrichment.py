@@ -1,21 +1,27 @@
+import sys # NOQA
 import numpy as np
 import matplotlib.pyplot as plt
 from collections.abc import Callable
+from typing import List
 
 import femflex as flex
 from femflex.space import GenericSpace
 
-from numba import jit
-
 
 class SpaceEnriched1DIGA(GenericSpace):
-    def __init__(self, mesh, k):
-        super().__init__(mesh, flex.Shape1DIGA(k))
+    def __init__(self, mesh, k, nval):
+        super().__init__(mesh, flex.Shape1DIGA(k), nval=nval)
 
     def _impl_generate_cell_to_dof_mapping(self, **kwargs):
         ncell = self.mesh().num_cells()
         deg = self.element().degree
-        dofs = [[i + j for j in range(1 + deg)] for i in range(ncell)]
+        nval = 1
+        if 'nval' in kwargs:
+            nval = kwargs['nval']
+        dofs = [[(i + j) * nval + k
+                 for j in range(1 + deg)
+                 for k in range(nval)]
+                for i in range(ncell)]
         return dofs
 
     def _impl_generate_cell_to_basis_mapping(self, **kwargs):
@@ -56,9 +62,11 @@ class Dirichlet(object):
             A[:, dof] = 0.0
             A[dof, dof] = 1.0
             return A
-        if 'x' in kwargs and 'value' in kwargs:
+        if 'x' in kwargs:
             x = kwargs['x']
-            value = kwargs['value']
+            value = x[dof] * 0.0
+            if 'value' in kwargs:
+                value = kwargs['value']
             x[dof] = value
             return x
         return
@@ -72,31 +80,6 @@ dt = 1e-3
 k0, k1 = 1.0e0, 1.0e0
 
 
-@jit(nopython=True)
-def qr(n=4):
-    sqrt = np.sqrt
-    asarray = np.asarray
-    if n == 1:
-        gp = asarray([0.0])
-        gw = asarray([2.0])
-    elif n == 2:
-        p = sqrt(1/3)
-        gp = asarray([p, -p])
-        gw = asarray([1.0, 1.0])
-    elif n == 3:
-        gp = asarray([-np.sqrt(3.0/5.0), 0.0, np.sqrt(3.0/5.0)])
-        gw = asarray([5.0, 8.0, 5.0]) / 9.0
-    elif n == 4:
-        p0 = sqrt(3/7-2/7*np.sqrt(6/5))
-        p1 = sqrt(3/7+2/7*np.sqrt(6/5))
-        gp = asarray([-p1, -p0, p0, p1])
-        w0 = 0.5 - sqrt(30) / 36
-        w1 = 0.5 + sqrt(30) / 36
-        gw = asarray([w0, w1, w1, w0])
-
-    return (gp + 1) * 0.5, gw * 0.5
-
-
 def assemble_init(space: GenericSpace,
                   T0: np.ndarray, f: Callable) -> np.ndarray:
     ndof = space.num_dofs()
@@ -104,7 +87,7 @@ def assemble_init(space: GenericSpace,
     mesh = space.mesh()
     ncell = space.mesh().num_cells()
     element = space.element()
-    gp, gw = qr()
+    gp, gw = flex.qr()
     basis_val_all = element.eval(gp, order=0)
     basis_grad_val_all = element.eval(gp, order=1)
     for ic in range(ncell):
@@ -125,73 +108,92 @@ def assemble_init(space: GenericSpace,
     return R[1:-1]
 
 
-def assemble_mat(space: GenericSpace) -> np.ndarray:
-    ndof = space.num_dofs()
-    R = np.zeros((ndof, ndof))
-    mesh = space.mesh()
-    ncell = space.mesh().num_cells()
-    element = space.element()
-    gp, gw = qr()
-    basis_cache = element.eval(gp, order=0)
-    basis_grad_cache = element.eval(gp, order=1)
-    for ic in range(ncell):
-        basis_dof = space.cell_basis(ic)
-        dof = space.cell_dof(ic)
-        xx = mesh.cell_coordinates(ic).squeeze()
-        basis_val = basis_cache[basis_dof]
-        basis_grad_val = basis_grad_cache[basis_dof]
-        dxdxi = xx[1] - xx[0]
-        detJ = np.abs(dxdxi)
-        basis_grad_val /= dxdxi
-        Rcell = am * basis_val @ (basis_val * gw * detJ).T
-        Rcell += dt * af * gamma \
-            * basis_grad_val @ (basis_grad_val * gw * detJ).T
-        R[np.ix_(dof, dof)] += Rcell
-    # print(R)
-    # sys.exit()
-    R[0, :] = 0.0
-    R[:, 0] = 0.0
-    R[0, 0] = 1.0
-    R[:, -1] = 0.0
-    R[-1, :] = 0.0
-    R[-1, -1] = 1.0
-    return R
+class Assembler:
+    def __init__(self, space: GenericSpace, bcs: List[Dirichlet] = None):
+        self.space = space
+        self.bcs = [] if bcs is None else bcs
 
+    @staticmethod
+    def assemble_mat(space: GenericSpace) -> np.ndarray:
+        ndof = space.num_dofs()
+        R = np.zeros((ndof, ndof))
+        mesh = space.mesh()
+        ncell = space.mesh().num_cells()
+        element = space.element()
+        gp, gw = flex.qr()
+        basis_cache = element.eval(gp, order=0)
+        basis_grad_cache = element.eval(gp, order=1)
+        for ic in range(ncell):
+            basis_dof = space.cell_basis(ic)
+            dof = space.cell_dof(ic)
+            xx = mesh.cell_coordinates(ic).squeeze()
+            basis_val = basis_cache[basis_dof]
+            basis_grad_val = basis_grad_cache[basis_dof]
+            dxdxi = xx[1] - xx[0]
+            detJ = np.abs(dxdxi)
+            basis_grad_val /= dxdxi
+            Rcell = am * basis_val @ (basis_val * gw * detJ).T
+            Rcell += dt * af * gamma \
+                * basis_grad_val @ (basis_grad_val * gw * detJ).T
+            R[np.ix_(dof, dof)] += Rcell
 
-def assemble_vec(space: GenericSpace, dT1: np.ndarray,
-                 dT0: np.ndarray, T0: np.ndarray, src) -> np.ndarray:
-    ndof = space.num_dofs()
-    R = np.zeros((ndof,))
-    mesh = space.mesh()
-    ncell = space.mesh().num_cells()
-    element = space.element()
-    gp, gw = qr()
-    basis_cache = element.eval(gp, order=0)
-    basis_grad_cache = element.eval(gp, order=1)
-    dTm = am * dT1 + (1 - am) * dT0
-    Tm = T0 + dt * af * (gamma * dT1 + (1 - gamma) * dT0)
+            # enrichment here
+            if xx[0] < 0.5 < xx[1]:
+                pass
+        return R
 
-    for ic in range(ncell):
-        basis_dof = space.cell_basis(ic)
-        dof = space.cell_dof(ic)
-        xx = mesh.cell_coordinates(ic).squeeze()
-        basis_val = basis_cache[basis_dof]
-        basis_grad_val = basis_grad_cache[basis_dof]
-        dxdxi = xx[1] - xx[0]
-        xc = xx[0] + dxdxi * gp
-        detJ = np.abs(dxdxi)
-        basis_grad_val /= dxdxi
-        dTm_val = dTm[dof].dot(basis_val)
-        gradTm_val = Tm[dof].dot(basis_grad_val)
-        Rcell = np.dot(basis_val, dTm_val * gw * detJ)
-        Rcell += np.dot(basis_grad_val, k0 * gradTm_val * gw * detJ)\
-            - np.dot(basis_val, src(xc) * gw * detJ)
-        R[dof] += Rcell
-    # print(R)
-    # sys.exit()
-    R[0] = 0.0
-    R[-1] = 0.0
-    return R
+    @staticmethod
+    def assemble_vec(space: GenericSpace, dT1: np.ndarray,
+                     dT0: np.ndarray, T0: np.ndarray,
+                     src: Callable) -> np.ndarray:
+        ndof = space.num_dofs()
+        R = np.zeros((ndof,))
+        mesh = space.mesh()
+        ncell = space.mesh().num_cells()
+        element = space.element()
+        gp, gw = flex.qr()
+        basis_cache = element.eval(gp, order=0)
+        basis_grad_cache = element.eval(gp, order=1)
+        dTm = am * dT1 + (1 - am) * dT0
+        Tm = T0 + dt * af * (gamma * dT1 + (1 - gamma) * dT0)
+
+        for ic in range(ncell):
+            basis_dof = space.cell_basis(ic)
+            dof = space.cell_dof(ic)
+            xx = mesh.cell_coordinates(ic).squeeze()
+            basis_val = basis_cache[basis_dof]
+            basis_grad_val = basis_grad_cache[basis_dof]
+            dxdxi = xx[1] - xx[0]
+            xc = xx[0] + dxdxi * gp
+            detJ = np.abs(dxdxi)
+            basis_grad_val /= dxdxi
+            dTm_val = dTm[dof].dot(basis_val)
+            gradTm_val = Tm[dof].dot(basis_grad_val)
+            Rcell = np.dot(basis_val, (dTm_val * gw * detJ).T)
+            Rcell += np.dot(basis_grad_val,
+                            np.array([k0, k1]) * gradTm_val * gw * detJ)
+            Rcell -= np.dot(basis_val, src(xc) * gw * detJ)
+            R[dof] += Rcell
+            if xx[0] < 0.5 < xx[1]:
+                pass
+        R[0] = 0.0
+        R[-1] = 0.0
+        return R
+
+    def assemble(self, A, tensor: str, **kwargs):
+        if tensor == 'vec':
+            dT1 = kwargs['dT1']
+            dT0 = kwargs['dT0']
+            T0 = kwargs['T0']
+            f = kwargs['f']
+            A = self.assemble_vec(self.space, dT1, dT0, T0, f)
+            for bc in self.bcs:
+                bc(x=A)
+        elif tensor == 'mat':
+            A = self.assemble_mat(self.space)
+            for bc in self.bcs:
+                bc(A=A)
+        return A
 
 
 def evaluate_vec(space, v, n=100):
@@ -229,17 +231,20 @@ def temperature(t, x):
 
 def main(nmesh, nntime=1000, visual=True):
     mesh = flex.IntervalMesh(nmesh, 2)
-    space = SpaceEnriched1DIGA(mesh, 2)
+    space = SpaceEnriched1DIGA(mesh, 2, 2)
     ndof = space.num_dofs()
     dT1 = np.zeros((ndof,))
     dT0 = np.zeros((ndof,))
     T0 = np.zeros((ndof,))
-
-    A = assemble_mat(space)
+    assembler = Assembler(space)
+    b = np.zeros((ndof,))
+    b = assembler.assemble(b, 'vec', dT1=dT1, dT0=dT0, T0=T0, f=src)
+    sys.exit()
+    A = assembler.assemble('mat', space)
     for i in range(nntime):
         # print(f'i={i+1}, time={i*dt+dt}')
         dT1 *= (gamma - 1) / gamma
-        b = assemble_vec(space, dT1, dT0, T0, src)
+        b = assembler.assemble('vec', space, dT1=dT1, dT0=dT0, T0=T0, f=src)
         dT1[:] -= np.linalg.solve(A, b)
         # res = assemble_vec(space, dT1, dT0, T0, src)
         # print(np.linalg.norm(res))
