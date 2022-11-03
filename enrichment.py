@@ -114,7 +114,11 @@ class Assembler:
         self.bcs = [] if bcs is None else bcs
 
     @staticmethod
-    def assemble_mat(space: GenericSpace) -> np.ndarray:
+    def sum(x, y):
+        return np.dot(x, y.T)
+
+    def assemble_mat(self) -> np.ndarray:
+        space = self.space()
         ndof = space.num_dofs()
         R = np.zeros((ndof, ndof))
         mesh = space.mesh()
@@ -142,10 +146,10 @@ class Assembler:
                 pass
         return R
 
-    @staticmethod
-    def assemble_vec(space: GenericSpace, dT1: np.ndarray,
+    def assemble_vec(self, dT1: np.ndarray,
                      dT0: np.ndarray, T0: np.ndarray,
                      src: Callable) -> np.ndarray:
+        space = self.space
         ndof = space.num_dofs()
         R = np.zeros((ndof,))
         mesh = space.mesh()
@@ -156,7 +160,6 @@ class Assembler:
         basis_grad_cache = element.eval(gp, order=1)
         dTm = am * dT1 + (1 - am) * dT0
         Tm = T0 + dt * af * (gamma * dT1 + (1 - gamma) * dT0)
-
         for ic in range(ncell):
             basis_dof = space.cell_basis(ic)
             dof = space.cell_dof(ic)
@@ -165,19 +168,20 @@ class Assembler:
             basis_grad_val = basis_grad_cache[basis_dof]
             dxdxi = xx[1] - xx[0]
             xc = xx[0] + dxdxi * gp
+            weights = (xc < 0.5) * gw
             detJ = np.abs(dxdxi)
             basis_grad_val /= dxdxi
             dTm_val = dTm[dof].dot(basis_val)
             gradTm_val = Tm[dof].dot(basis_grad_val)
-            Rcell = np.dot(basis_val, (dTm_val * gw * detJ).T)
-            Rcell += np.dot(basis_grad_val,
-                            np.array([k0, k1]) * gradTm_val * gw * detJ)
-            Rcell -= np.dot(basis_val, src(xc) * gw * detJ)
-            R[dof] += Rcell
+            Rcell = self.sum(basis_val, dTm_val * weights * detJ)
+            K = np.diag([k0, k1])
+            Rcell += self.sum(basis_grad_val,
+                              K @ gradTm_val * weights * detJ)
+            Rcell -= self.sum(basis_val, src(xc) * weights * detJ)
+            R[dof.flatten()] += Rcell.flatten()
             if xx[0] < 0.5 < xx[1]:
                 pass
-        R[0] = 0.0
-        R[-1] = 0.0
+
         return R
 
     def assemble(self, A, tensor: str, **kwargs):
@@ -186,7 +190,7 @@ class Assembler:
             dT0 = kwargs['dT0']
             T0 = kwargs['T0']
             f = kwargs['f']
-            A = self.assemble_vec(self.space, dT1, dT0, T0, f)
+            A = self.assemble_vec(dT1, dT0, T0, f)
             for bc in self.bcs:
                 bc(x=A)
         elif tensor == 'mat':
@@ -221,7 +225,7 @@ def evaluate_error(v0, v1):
 
 def src(x):
     pi = np.pi
-    return np.sin(pi*x)
+    return np.ones((2, 1)) @ (np.sin(pi*x).reshape(1, -1))
 
 
 def temperature(t, x):
