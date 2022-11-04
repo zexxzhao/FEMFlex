@@ -65,7 +65,7 @@ class Dirichlet(object):
         if 'x' in kwargs:
             x = kwargs['x']
             value = x[dof] * 0.0
-            if 'value' in kwargs:
+            if 'value' in kwargs and kwargs['value'] is not None:
                 value = kwargs['value']
             x[dof] = value
             return x
@@ -78,6 +78,7 @@ af = 1 / (1 + rhoc)
 gamma = 0.5 + am - af
 dt = 1e-3
 k0, k1 = 1.0e0, 1.0e0
+tauB = 1e3
 
 
 def assemble_init(space: GenericSpace,
@@ -118,32 +119,51 @@ class Assembler:
         return np.dot(x, y.T)
 
     def assemble_mat(self) -> np.ndarray:
-        space = self.space()
+        space = self.space
         ndof = space.num_dofs()
         R = np.zeros((ndof, ndof))
         mesh = space.mesh()
         ncell = space.mesh().num_cells()
         element = space.element()
-        gp, gw = flex.qr()
-        basis_cache = element.eval(gp, order=0)
-        basis_grad_cache = element.eval(gp, order=1)
+        qr_p, qr_w = flex.qr()
+        basis_cache = element.eval(qr_p, order=0)
+        basis_grad_cache = element.eval(qr_p, order=1)
         for ic in range(ncell):
             basis_dof = space.cell_basis(ic)
+            basis_dof2 = np.repeat(basis_dof, 2)
             dof = space.cell_dof(ic)
             xx = mesh.cell_coordinates(ic).squeeze()
-            basis_val = basis_cache[basis_dof]
-            basis_grad_val = basis_grad_cache[basis_dof]
+            basis_val = basis_cache[basis_dof2]
+            basis_grad_val = basis_grad_cache[basis_dof2]
             dxdxi = xx[1] - xx[0]
+            xc = xx[0] + dxdxi * qr_p
+            weights = (xc < 0.5) * qr_w
             detJ = np.abs(dxdxi)
             basis_grad_val /= dxdxi
-            Rcell = am * basis_val @ (basis_val * gw * detJ).T
+            Rcell = am * basis_val @ (basis_val * weights * detJ).T
             Rcell += dt * af * gamma \
-                * basis_grad_val @ (basis_grad_val * gw * detJ).T
-            R[np.ix_(dof, dof)] += Rcell
+                * basis_grad_val @ (basis_grad_val * weights * detJ).T
 
             # enrichment here
             if xx[0] < 0.5 < xx[1]:
-                pass
+                basis_val = basis_cache[basis_dof]
+                basis_grad_val = basis_grad_cache[basis_dof]
+                Rcell[0::2, 0::2] -= basis_val @ 0.5 * k0 * basis_grad_val.T
+                Rcell[0::2, 0::2] -= k0 * basis_grad_val @ basis_val.T
+                Rcell[0::2, 0::2] += tauB * basis_val @ basis_val.T
+
+                Rcell[0::2, 1::2] -= basis_val @ 0.5 * k1 * basis_grad_val
+                Rcell[0::2, 1::2] += k1 * basis_grad_val @ basis_val.T
+                Rcell[0::2, 1::2] -= tauB * basis_val @ basis_val.T
+
+                Rcell[1::2, 0::2] += basis_val @ 0.5 * k0 * basis_grad_val.T
+                Rcell[1::2, 0::2] -= k1 * basis_grad_val @ basis_val.T
+                Rcell[1::2, 0::2] -= tauB * basis_val @ basis_val.T
+
+                Rcell[1::2, 1::2] += basis_val @ 0.5 * k1 * basis_grad_val.T
+                Rcell[1::2, 1::2] += k1 * basis_grad_val @ basis_val.T
+                Rcell[1::2, 1::2] += tauB * basis_val @ basis_val.T
+            R[np.ix_(dof.T.flatten(), dof.T.flatten())] += Rcell
         return R
 
     def assemble_vec(self, dT1: np.ndarray,
@@ -155,9 +175,9 @@ class Assembler:
         mesh = space.mesh()
         ncell = space.mesh().num_cells()
         element = space.element()
-        gp, gw = flex.qr()
-        basis_cache = element.eval(gp, order=0)
-        basis_grad_cache = element.eval(gp, order=1)
+        qr_p, qr_w = flex.qr()
+        basis_cache = element.eval(qr_p, order=0)
+        basis_grad_cache = element.eval(qr_p, order=1)
         dTm = am * dT1 + (1 - am) * dT0
         Tm = T0 + dt * af * (gamma * dT1 + (1 - gamma) * dT0)
         for ic in range(ncell):
@@ -167,37 +187,45 @@ class Assembler:
             basis_val = basis_cache[basis_dof]
             basis_grad_val = basis_grad_cache[basis_dof]
             dxdxi = xx[1] - xx[0]
-            xc = xx[0] + dxdxi * gp
-            weights = (xc < 0.5) * gw
+            xc = xx[0] + dxdxi * qr_p
+            weights = (xc < 0.5) * qr_w
             detJ = np.abs(dxdxi)
             basis_grad_val /= dxdxi
             dTm_val = dTm[dof].dot(basis_val)
             gradTm_val = Tm[dof].dot(basis_grad_val)
-            Rcell = self.sum(basis_val, dTm_val * weights * detJ)
+            Rcell = np.zeros_like(dof.T) * 0.0
+            Rcell += self.sum(basis_val, dTm_val * weights * detJ)
             K = np.diag([k0, k1])
             Rcell += self.sum(basis_grad_val,
                               K @ gradTm_val * weights * detJ)
             Rcell -= self.sum(basis_val, src(xc) * weights * detJ)
-            R[dof.flatten()] += Rcell.flatten()
-            if xx[0] < 0.5 < xx[1]:
-                pass
 
+            if xx[0] + dxdxi*1e-3 < 0.5 < xx[1] - dxdxi*1e-3:
+                gp = np.asarray([0.5])
+                basis_val = element.eval(gp, order=0, index=basis_dof)
+                basis_grad_val = element.eval(gp, order=1, index=basis_dof)
+                weights = np.asarray([1.0])
+                flux_m = 0.5 * (k0 * Tm[dof[0, :]].dot(basis_grad_val)
+                                + k1 * Tm[dof[1, :]].dot(basis_grad_val))
+                tem_m = 0.5 * (Tm[dof[0, :]].dot(basis_val)
+                               + Tm[dof[1, :]].dot(basis_val))
+                Rcell[0, :] -= self.sum(basis_val, flux_m)
+                Rcell[0, :] -= self.sum(k0 * basis_grad_val, tem_m)
+                Rcell[0, :] += tauB * self.sum(basis_val, tem_m)
+
+                Rcell[1, :] += self.sum(basis_val, flux_m)
+                Rcell[1, :] -= self.sum(k1 * basis_grad_val, tem_m)
+                Rcell[1, :] -= tauB * self.sum(basis_val, tem_m)
+            R[dof.T.flatten()] += Rcell.flatten()
         return R
 
-    def assemble(self, A, tensor: str, **kwargs):
-        if tensor == 'vec':
-            dT1 = kwargs['dT1']
-            dT0 = kwargs['dT0']
-            T0 = kwargs['T0']
-            f = kwargs['f']
-            A = self.assemble_vec(dT1, dT0, T0, f)
-            for bc in self.bcs:
-                bc(x=A)
-        elif tensor == 'mat':
-            A = self.assemble_mat(self.space)
+    def apply_bcs(self, A=None, x=None, values=None):
+        if A is not None:
             for bc in self.bcs:
                 bc(A=A)
-        return A
+        elif x is not None:
+            for bc in self.bcs:
+                bc(x=x, values=values)
 
 
 def evaluate_vec(space, v, n=100):
@@ -205,16 +233,20 @@ def evaluate_vec(space, v, n=100):
     xp = []
     vp = []
     element = space.element()
+    xi = np.linspace(0, 1, n+1)
+    basis_cache = element.eval(xi, order=0)
     for ic in range(mesh.num_cells()):
         xx = mesh.cell_coordinates(ic).squeeze()
         basis_dof = space.cell_basis(ic)
         dofs = space.cell_dof(ic)
-
-        xi = np.linspace(0, 1, n+1)
-        basis_val = element.eval(xi, order=0, index=basis_dof)
+        basis_val = basis_cache[basis_dof]
         xc = xx[0] + (xx[1] - xx[0]) * xi
         xp += xc.tolist()
-        vp += v[dofs].dot(basis_val).tolist()
+        tmp = v[dofs].dot(basis_val)
+        tmp[0, :] *= xc < 0.5
+        tmp[1, :] *= xc >= 0.5
+        tmp = np.sum(tmp, axis=0).tolist()
+        vp += tmp
     return np.asarray(xp), np.asarray(vp)
 
 
@@ -241,14 +273,16 @@ def main(nmesh, nntime=1000, visual=True):
     dT0 = np.zeros((ndof,))
     T0 = np.zeros((ndof,))
     assembler = Assembler(space)
-    b = np.zeros((ndof,))
-    b = assembler.assemble(b, 'vec', dT1=dT1, dT0=dT0, T0=T0, f=src)
-    sys.exit()
-    A = assembler.assemble('mat', space)
+
+    A = assembler.assemble_mat()
+    assembler.apply_bcs(A=A)
+
+    # sys.exit()
     for i in range(nntime):
         # print(f'i={i+1}, time={i*dt+dt}')
         dT1 *= (gamma - 1) / gamma
-        b = assembler.assemble('vec', space, dT1=dT1, dT0=dT0, T0=T0, f=src)
+        b = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
+        assembler.apply_bcs(x=b)
         dT1[:] -= np.linalg.solve(A, b)
         # res = assemble_vec(space, dT1, dT0, T0, src)
         # print(np.linalg.norm(res))
