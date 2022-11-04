@@ -67,7 +67,8 @@ class Shape1DIGA(ShapeFunctionBase):
                 return (f(x+h) - f(x-h)) / (2.0*h)
             return f if d == 0 else f1
         from collections.abc import Sequence
-        if isinstance(index, Sequence):
+        from numpy import ndarray
+        if isinstance(index, Sequence) or isinstance(index, ndarray):
             return [derivative(self.base_fn[idx], order) for idx in index]
         else:
             return derivative(self.base_fn[index], order)

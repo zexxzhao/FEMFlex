@@ -31,12 +31,12 @@ class SpaceEnriched1DIGA(GenericSpace):
             def load_basis(n):
                 if n == 0:
                     return [0, 1, 3]
-                elif n == 2:
-                    return [2, 4, 3]
-                elif n == ncell - 2:
-                    return [5, 4, 6]
                 elif n == ncell - 1:
                     return [5, 7, 8]
+                elif n == ncell - 2:
+                    return [5, 4, 6]
+                elif n == 2:
+                    return [2, 4, 3]
                 else:
                     return [5, 4, 3]
 
@@ -55,7 +55,7 @@ class Dirichlet(object):
         return self._dofs
 
     def __call__(self, **kwargs):
-        dof = self.dofs()
+        dof = self.dofs
         if 'A' in kwargs:
             A = kwargs['A']
             A[dof, :] = 0.0
@@ -125,7 +125,7 @@ class Assembler:
         mesh = space.mesh()
         ncell = space.mesh().num_cells()
         element = space.element()
-        qr_p, qr_w = flex.qr()
+        qr_p, qr_w = flex.qr(4)
         basis_cache = element.eval(qr_p, order=0)
         basis_grad_cache = element.eval(qr_p, order=1)
         for ic in range(ncell):
@@ -137,32 +137,50 @@ class Assembler:
             basis_grad_val = basis_grad_cache[basis_dof2]
             dxdxi = xx[1] - xx[0]
             xc = xx[0] + dxdxi * qr_p
-            weights = (xc < 0.5) * qr_w
+            weights = qr_w[:]
+            basis_val[0::2] *= xc < 0.5
+            basis_val[1::2] *= xc >= 0.5
+            basis_grad_val[0::2] *= xc < 0.5
+            basis_grad_val[1::2] *= xc >= 0.5
+
             detJ = np.abs(dxdxi)
             basis_grad_val /= dxdxi
             Rcell = am * basis_val @ (basis_val * weights * detJ).T
+            K = np.diag(np.tile([k0, k1], 3))
             Rcell += dt * af * gamma \
-                * basis_grad_val @ (basis_grad_val * weights * detJ).T
+                * K @ basis_grad_val @ (basis_grad_val * weights * detJ).T
 
             # enrichment here
-            if xx[0] < 0.5 < xx[1]:
-                basis_val = basis_cache[basis_dof]
-                basis_grad_val = basis_grad_cache[basis_dof]
-                Rcell[0::2, 0::2] -= basis_val @ 0.5 * k0 * basis_grad_val.T
-                Rcell[0::2, 0::2] -= k0 * basis_grad_val @ basis_val.T
-                Rcell[0::2, 0::2] += tauB * basis_val @ basis_val.T
+            if xx[0] + dxdxi*1e-3 < 0.5 < xx[1] - dxdxi*1e-3:
+                gp = np.asarray([0.5])
+                basis_val = element.eval(gp, order=0, index=basis_dof)
+                basis_grad_val = element.eval(gp, order=1, index=basis_dof)
+                c = dt * af * gamma
+                Rcell[0::2, 0::2] -= c * self.sum(basis_val,
+                                                  0.5 * k0 * basis_grad_val)
+                Rcell[0::2, 0::2] -= c * self.sum(k0 * basis_grad_val,
+                                                  0.5 * basis_val)
+                Rcell[0::2, 0::2] += c * self.sum(tauB * basis_val, basis_val)
 
-                Rcell[0::2, 1::2] -= basis_val @ 0.5 * k1 * basis_grad_val
-                Rcell[0::2, 1::2] += k1 * basis_grad_val @ basis_val.T
-                Rcell[0::2, 1::2] -= tauB * basis_val @ basis_val.T
+                Rcell[0::2, 1::2] -= c * self.sum(basis_val,
+                                                  0.5 * k1 * basis_grad_val)
+                Rcell[0::2, 1::2] += c * self.sum(k0 * basis_grad_val,
+                                                  0.5 * basis_val)
+                Rcell[0::2, 1::2] -= c * self.sum(tauB * basis_val, basis_val)
 
-                Rcell[1::2, 0::2] += basis_val @ 0.5 * k0 * basis_grad_val.T
-                Rcell[1::2, 0::2] -= k1 * basis_grad_val @ basis_val.T
-                Rcell[1::2, 0::2] -= tauB * basis_val @ basis_val.T
+                Rcell[1::2, 0::2] += c * self.sum(basis_val,
+                                                  0.5 * k0 * basis_grad_val)
+                Rcell[1::2, 0::2] -= c * self.sum(k1 * basis_grad_val,
+                                                  0.5 * basis_val)
+                Rcell[1::2, 0::2] -= c * self.sum(tauB * basis_val, basis_val)
 
-                Rcell[1::2, 1::2] += basis_val @ 0.5 * k1 * basis_grad_val.T
-                Rcell[1::2, 1::2] += k1 * basis_grad_val @ basis_val.T
-                Rcell[1::2, 1::2] += tauB * basis_val @ basis_val.T
+                Rcell[1::2, 1::2] += c * self.sum(basis_val,
+                                                  0.5 * k1 * basis_grad_val)
+                Rcell[1::2, 1::2] += c * self.sum(k1 * basis_grad_val,
+                                                  0.5 * basis_val)
+                Rcell[1::2, 1::2] += c * self.sum(tauB * basis_val,
+                                                  basis_val)
+
             R[np.ix_(dof.T.flatten(), dof.T.flatten())] += Rcell
         return R
 
@@ -175,32 +193,35 @@ class Assembler:
         mesh = space.mesh()
         ncell = space.mesh().num_cells()
         element = space.element()
-        qr_p, qr_w = flex.qr()
+        qr_p, qr_w = flex.qr(4)
         basis_cache = element.eval(qr_p, order=0)
         basis_grad_cache = element.eval(qr_p, order=1)
         dTm = am * dT1 + (1 - am) * dT0
         Tm = T0 + dt * af * (gamma * dT1 + (1 - gamma) * dT0)
         for ic in range(ncell):
             basis_dof = space.cell_basis(ic)
+            # basis_dof2 = np.repeat(basis_dof, 2)
             dof = space.cell_dof(ic)
             xx = mesh.cell_coordinates(ic).squeeze()
             basis_val = basis_cache[basis_dof]
             basis_grad_val = basis_grad_cache[basis_dof]
             dxdxi = xx[1] - xx[0]
             xc = xx[0] + dxdxi * qr_p
-            weights = (xc < 0.5) * qr_w
+            weights = np.tile(qr_w, 2).reshape(2, -1)
+            weights[0, :] *= xc < 0.5
+            weights[1, :] *= xc >= 0.5
             detJ = np.abs(dxdxi)
             basis_grad_val /= dxdxi
             dTm_val = dTm[dof].dot(basis_val)
             gradTm_val = Tm[dof].dot(basis_grad_val)
-            Rcell = np.zeros_like(dof.T) * 0.0
+            Rcell = np.zeros_like(dof.T, dtype=np.float64)
             Rcell += self.sum(basis_val, dTm_val * weights * detJ)
             K = np.diag([k0, k1])
             Rcell += self.sum(basis_grad_val,
                               K @ gradTm_val * weights * detJ)
             Rcell -= self.sum(basis_val, src(xc) * weights * detJ)
 
-            if xx[0] + dxdxi*1e-3 < 0.5 < xx[1] - dxdxi*1e-3:
+            if xx[0] + dxdxi*1e-3 < 0.5 < xx[1] - dxdxi*1e-3 and 0:
                 gp = np.asarray([0.5])
                 basis_val = element.eval(gp, order=0, index=basis_dof)
                 basis_grad_val = element.eval(gp, order=1, index=basis_dof)
@@ -208,14 +229,14 @@ class Assembler:
                 flux_m = 0.5 * (k0 * Tm[dof[0, :]].dot(basis_grad_val)
                                 + k1 * Tm[dof[1, :]].dot(basis_grad_val))
                 tem_m = 0.5 * (Tm[dof[0, :]].dot(basis_val)
-                               + Tm[dof[1, :]].dot(basis_val))
-                Rcell[0, :] -= self.sum(basis_val, flux_m)
-                Rcell[0, :] -= self.sum(k0 * basis_grad_val, tem_m)
-                Rcell[0, :] += tauB * self.sum(basis_val, tem_m)
+                               - Tm[dof[1, :]].dot(basis_val))
+                Rcell[:, 0] -= self.sum(basis_val, flux_m)
+                Rcell[:, 0] -= self.sum(k0 * basis_grad_val, tem_m)
+                Rcell[:, 0] += tauB * self.sum(basis_val, tem_m)
 
-                Rcell[1, :] += self.sum(basis_val, flux_m)
-                Rcell[1, :] -= self.sum(k1 * basis_grad_val, tem_m)
-                Rcell[1, :] -= tauB * self.sum(basis_val, tem_m)
+                Rcell[:, 1] += self.sum(basis_val, flux_m)
+                Rcell[:, 1] -= self.sum(k1 * basis_grad_val, tem_m)
+                Rcell[:, 1] -= tauB * self.sum(basis_val, tem_m)
             R[dof.T.flatten()] += Rcell.flatten()
         return R
 
@@ -272,20 +293,54 @@ def main(nmesh, nntime=1000, visual=True):
     dT1 = np.zeros((ndof,))
     dT0 = np.zeros((ndof,))
     T0 = np.zeros((ndof,))
-    assembler = Assembler(space)
+    # bc
+    frozen_dofs = []
+    for ic in range(nmesh):
+        dof = space.cell_dof(ic)
+        xx = mesh.cell_coordinates(ic).squeeze()
+        dxdxi = xx[1] - xx[0]
+        if xx[1] + dxdxi * 1e-3 < 0.5:
+            frozen_dofs += dof[0, :].tolist()
+        elif xx[0] - dxdxi * 1e-3 > 0.5:
+            frozen_dofs += dof[1, :].tolist()
+        elif xx[0] + dxdxi * 1e-3 < 0.5 < xx[1] - dxdxi * 1e-3:
+            frozen_dofs += dof.flatten().tolist()
+    alldof = np.zeros((ndof,))
+    alldof[frozen_dofs] = 1
+    frozen_dofs = np.argwhere(alldof == 0).squeeze().tolist()
+    frozen_dofs.append(0)
+    frozen_dofs.append(ndof - 1)
+    active_dofs = [d for d in range(ndof) if d not in frozen_dofs]
+    bc_redundant_dofs = Dirichlet(frozen_dofs)
+
+    assembler = Assembler(space, [bc_redundant_dofs])
 
     A = assembler.assemble_mat()
     assembler.apply_bcs(A=A)
+    # print(np.linalg.det(A))
+    # print(A)
+    print(frozen_dofs)
 
     # sys.exit()
+    from scipy.sparse.linalg import gmres
+    from scipy.optimize import root
     for i in range(nntime):
-        # print(f'i={i+1}, time={i*dt+dt}')
+        print(f'i={i+1}, time={i*dt+dt}')
         dT1 *= (gamma - 1) / gamma
-        b = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
-        assembler.apply_bcs(x=b)
-        dT1[:] -= np.linalg.solve(A, b)
-        # res = assemble_vec(space, dT1, dT0, T0, src)
-        # print(np.linalg.norm(res))
+
+        def f(x):
+            tmp = np.zeros((ndof,))
+            tmp[active_dofs] = x
+            b = assembler.assemble_vec(dT1=tmp, dT0=dT0, T0=T0, src=src)
+            return b[active_dofs]
+        # b = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
+        # assembler.apply_bcs(x=b)
+        # dT1[:] -= np.linalg.solve(A, b)
+        sol = root(f, dT1[active_dofs], tol=1e-12)
+        # dT1[:] -= gmres(A, b)[0]
+        dT1[active_dofs] = sol.x
+        #res = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
+        #print(np.linalg.norm(res))
         T0[:] += dt * (gamma * dT1 + (1 - gamma) * dT0)
         dT0[:] = dT1[:]
 
@@ -312,7 +367,8 @@ def main(nmesh, nntime=1000, visual=True):
         plt.yticks(fontsize=15)
         plt.xlim([0, 1])
         plt.tight_layout()
-        plt.savefig('./cmp.png')
+        # plt.savefig('./cmp.png')
+        plt.show()
 
     return evaluate_error(Tp, yp)
 
@@ -332,13 +388,14 @@ def profiling(f, turn_on):
 if __name__ == '__main__':
     main = profiling(main, 1)
     error_l2 = []
-    for i in range(1, 7):
-        ncell = 2 ** i
-        e = main(ncell, 1000, 0)
+    for i in range(3, 4):
+        ncell = 2 ** i + 1
+        e = main(ncell, 100, 1)
         error_l2.append(e[0])
         print(i, e)
+    sys.exit()
     error_l2 = np.array(error_l2)
-    h = 1 / 2 ** np.arange(1, 7)
+    h = 1 / 2 ** np.arange(3, 8)
     p = np.polyfit(np.log(h)[1:], np.log(error_l2)[1:], 1)
     print(p)
 
