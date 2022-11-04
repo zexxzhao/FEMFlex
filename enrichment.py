@@ -128,16 +128,30 @@ class Assembler:
         qr_p, qr_w = flex.qr(4)
         basis_cache = element.eval(qr_p, order=0)
         basis_grad_cache = element.eval(qr_p, order=1)
+
+        def is_cut_element(x):
+            dx = xx[1] - xx[0]
+            return xx[0] + dx*1e-3 < 0.5 < xx[1] - dx*1e-3
+
         for ic in range(ncell):
             basis_dof = space.cell_basis(ic)
             basis_dof2 = np.repeat(basis_dof, 2)
             dof = space.cell_dof(ic)
             xx = mesh.cell_coordinates(ic).squeeze()
-            basis_val = basis_cache[basis_dof2]
-            basis_grad_val = basis_grad_cache[basis_dof2]
             dxdxi = xx[1] - xx[0]
             xc = xx[0] + dxdxi * qr_p
+            basis_val = basis_cache[basis_dof2]
+            basis_grad_val = basis_grad_cache[basis_dof2]
             weights = qr_w[:]
+            if is_cut_element(xx):
+                gp = np.hstack((qr_p * 0.5, qr_p * 0.5 + 0.5))
+                xc = xx[0] + (xx[1] - xx[0]) * gp
+                basis_val = element.eval(gp, order=0, index=basis_dof)
+                basis_val = np.repeat(basis_val, 2, axis=0)
+                basis_grad_val = element.eval(gp, order=1, index=basis_dof)
+                basis_grad_val = np.repeat(basis_grad_val, 2, axis=0)
+                weights = np.hstack((weights, weights)) * 0.5
+
             basis_val[0::2] *= xc < 0.5
             basis_val[1::2] *= xc >= 0.5
             basis_grad_val[0::2] *= xc < 0.5
@@ -196,6 +210,11 @@ class Assembler:
         qr_p, qr_w = flex.qr(4)
         basis_cache = element.eval(qr_p, order=0)
         basis_grad_cache = element.eval(qr_p, order=1)
+
+        def is_cut_element(x):
+            dx = xx[1] - xx[0]
+            return xx[0] + dx*1e-3 < 0.5 < xx[1] - dx*1e-3
+
         dTm = am * dT1 + (1 - am) * dT0
         Tm = T0 + dt * af * (gamma * dT1 + (1 - gamma) * dT0)
         for ic in range(ncell):
@@ -207,7 +226,14 @@ class Assembler:
             basis_grad_val = basis_grad_cache[basis_dof]
             dxdxi = xx[1] - xx[0]
             xc = xx[0] + dxdxi * qr_p
-            weights = np.tile(qr_w, 2).reshape(2, -1)
+            weights = qr_w[:]
+            if is_cut_element(xx):
+                gp = np.hstack((qr_p * 0.5, qr_p * 0.5 + 0.5))
+                xc = xx[0] + dxdxi * gp
+                basis_val = element.eval(gp, order=0, index=basis_dof)
+                basis_grad_val = element.eval(gp, order=1, index=basis_dof)
+                weights = np.tile(qr_w, 2) * 0.5
+            weights = np.tile(weights, 2).reshape(2, -1)
             weights[0, :] *= xc < 0.5
             weights[1, :] *= xc >= 0.5
             detJ = np.abs(dxdxi)
@@ -317,6 +343,8 @@ def main(nmesh, nntime=1000, visual=True):
 
     A = assembler.assemble_mat()
     assembler.apply_bcs(A=A)
+    from scipy.sparse import csr_matrix
+    A = csr_matrix(A)
     # print(np.linalg.det(A))
     # print(A)
     print(frozen_dofs)
@@ -324,23 +352,27 @@ def main(nmesh, nntime=1000, visual=True):
     # sys.exit()
     from scipy.sparse.linalg import gmres
     from scipy.optimize import root
+    solver_type = 'krylov'
     for i in range(nntime):
-        print(f'i={i+1}, time={i*dt+dt}')
-        dT1 *= (gamma - 1) / gamma
 
-        def f(x):
-            tmp = np.zeros((ndof,))
-            tmp[active_dofs] = x
-            b = assembler.assemble_vec(dT1=tmp, dT0=dT0, T0=T0, src=src)
-            return b[active_dofs]
-        # b = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
-        # assembler.apply_bcs(x=b)
-        # dT1[:] -= np.linalg.solve(A, b)
-        sol = root(f, dT1[active_dofs], tol=1e-12)
-        # dT1[:] -= gmres(A, b)[0]
-        dT1[active_dofs] = sol.x
-        #res = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
-        #print(np.linalg.norm(res))
+        dT1 *= (gamma - 1) / gamma
+        if solver_type == 'hybr':
+            def f(x):
+                tmp = np.zeros((ndof,))
+                tmp[active_dofs] = x
+                b = assembler.assemble_vec(dT1=tmp, dT0=dT0, T0=T0, src=src)
+                return b[active_dofs]
+            sol = root(f, dT1[active_dofs], tol=1e-12)
+            dT1[active_dofs] = sol.x
+        elif solver_type == 'krylov':
+            b = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
+            assembler.apply_bcs(x=b)
+            dT1[:] -= gmres(A, b, tol=1e-15)[0]
+        if (i+1) % 100 == 0:
+            print(f'i={i+1}, time={i*dt+dt}')
+            res = assembler.assemble_vec(dT1=dT1, dT0=dT0, T0=T0, src=src)
+            assembler.apply_bcs(x=res)
+            print(np.linalg.norm(res))
         T0[:] += dt * (gamma * dT1 + (1 - gamma) * dT0)
         dT0[:] = dT1[:]
 
@@ -388,19 +420,20 @@ def profiling(f, turn_on):
 if __name__ == '__main__':
     main = profiling(main, 1)
     error_l2 = []
-    for i in range(3, 4):
+    rsl_range = np.arange(7, 8)
+    for i in rsl_range:
         ncell = 2 ** i + 1
-        e = main(ncell, 100, 1)
+        e = main(ncell, 1000, 1)
         error_l2.append(e[0])
         print(i, e)
-    sys.exit()
     error_l2 = np.array(error_l2)
-    h = 1 / 2 ** np.arange(3, 8)
-    p = np.polyfit(np.log(h)[1:], np.log(error_l2)[1:], 1)
+    h = 1 / 2 ** rsl_range
+    p = np.polyfit(np.log(h)[2:], np.log(error_l2)[2:], 1)
     print(p)
 
     plt.loglog(h, error_l2, '-*', label='2nd IGA')
     plt.loglog(h, 0.02*h**3, '--k', label='k=3')
+    plt.loglog(h, 0.02*h**2, '--k', label='k=2')
     plt.xlabel(r'$h$', fontsize=20)
     plt.ylabel(r'$e$', fontsize=20)
     plt.xticks(fontsize=15)
